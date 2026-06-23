@@ -1,7 +1,6 @@
-// Vercel Serverless Function · POST /api/scan  (Google Gemini · free tier)
+// Vercel Serverless Function · POST /api/scan  (Anthropic · Claude vision)
 // Recibe { image: "<base64 jpeg>" } y devuelve { stickers: [{code,num}] }.
-// La API key vive en la env var GEMINI_API_KEY (Settings -> Environment Variables).
-// Saca una key gratis en https://aistudio.google.com/apikey
+// La API key vive en la env var ANTHROPIC_API_KEY (Settings -> Environment Variables).
 
 const VALID_CODES = [
   "MEX","RSA","KOR","CZE","CAN","BIH","QAT","SUI","BRA","MAR","HAI","SCO","USA","PAR",
@@ -22,37 +21,31 @@ const PROMPT =
 module.exports = async (req, res) => {
   if (req.method !== "POST") { res.status(405).json({ error: "method not allowed" }); return; }
   try {
-    const KEY = process.env.GEMINI_API_KEY;
-    if (!KEY) { res.status(500).json({ error: "Falta GEMINI_API_KEY en el proyecto de Vercel." }); return; }
+    const KEY = process.env.ANTHROPIC_API_KEY;
+    if (!KEY) { res.status(500).json({ error: "Falta ANTHROPIC_API_KEY en el proyecto de Vercel." }); return; }
 
     let body = req.body;
     if (typeof body === "string") { try { body = JSON.parse(body); } catch (_) { body = {}; } }
     const image = (body && body.image) || "";
     if (!image) { res.status(400).json({ error: "Falta la imagen." }); return; }
 
-    const MODEL = process.env.SCAN_MODEL || "gemini-3.5-flash";
-    const url = "https://generativelanguage.googleapis.com/v1beta/models/" + MODEL + ":generateContent";
-
-    const gr = await fetch(url, {
+    const MODEL = process.env.SCAN_MODEL || "claude-sonnet-4-6";
+    const ar = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
-      headers: { "content-type": "application/json", "x-goog-api-key": KEY },
+      headers: { "content-type": "application/json", "x-api-key": KEY, "anthropic-version": "2023-06-01" },
       body: JSON.stringify({
-        contents: [{
-          parts: [
-            { inline_data: { mime_type: "image/jpeg", data: image } },
-            { text: PROMPT }
-          ]
-        }],
-        generationConfig: { temperature: 0, maxOutputTokens: 2048, responseMimeType: "application/json" }
+        model: MODEL, max_tokens: 1024,
+        messages: [{ role: "user", content: [
+          { type: "image", source: { type: "base64", media_type: "image/jpeg", data: image } },
+          { type: "text", text: PROMPT }
+        ] }]
       })
     });
 
-    const data = await gr.json();
+    const data = await ar.json();
     if (data.error) { res.status(502).json({ error: data.error.message || "Error de la API" }); return; }
 
-    const text = ((((data.candidates || [])[0] || {}).content || {}).parts || [])
-      .filter(p => typeof p.text === "string").map(p => p.text).join("");
-
+    const text = (data.content || []).filter(b => b.type === "text").map(b => b.text).join("");
     let stickers = [];
     try {
       const c = text.slice(text.indexOf("["), text.lastIndexOf("]") + 1);
