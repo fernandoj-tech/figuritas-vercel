@@ -12699,6 +12699,7 @@ function findAlignmentPattern(matrix, alignmentPatternQuads, topRight, topLeft, 
     <h3>Opciones</h3>
     <p class="lead">Tus marcas se guardan solas en este dispositivo.</p>
     <div class="mlist">
+      <button class="mitem" id="mInstall"><span class="ic">📲</span><span class="tx"><b>Instalar la app</b><span>Agregala a tu teléfono (pantalla de inicio)</span></span></button>
       <button class="mitem" id="mImport"><span class="ic">⤓</span><span class="tx"><b>Importar desde captura</b><span>Subí un export de figuritas.app y carga tu álbum</span></span></button>
       <button class="mitem" id="mAllTengo"><span class="ic">✓</span><span class="tx"><b>Marcar todo como “tengo”</b><span>Álbum completo, sin repes</span></span></button>
       <button class="mitem" id="mClearRepe"><span class="ic">♻</span><span class="tx"><b>Pasar repetidas a “tengo”</b><span>Las entregaste todas: repe → tengo</span></span></button>
@@ -12749,6 +12750,28 @@ function findAlignmentPattern(matrix, alignmentPatternQuads, topRight, topLeft, 
     <p class="lead" id="qrcamMsg">Apuntá la cámara al QR de “Exportar álbum” del otro celu.</p>
     <div class="camwrap"><video id="qrcamVideo" playsinline muted></video><div class="camframe"></div></div>
     <div class="row"><button class="btn line" id="qrcamCancel">Cancelar</button></div>
+  </div>
+</div>
+
+<!-- Instalar app (PWA) -->
+<style>
+#installBar{position:fixed;top:0;left:0;right:0;z-index:130;display:none;align-items:center;gap:10px;padding:calc(env(safe-area-inset-top,0px) + 9px) 14px 9px;background:#0C3A2B;color:#fff;box-shadow:0 4px 16px rgba(0,0,0,.25)}
+#installBar .ibtxt{flex:1;font-size:14px;line-height:1.25}
+#installBar .igo{background:#fff;color:#0C3A2B;border:0;border-radius:10px;font-weight:800;padding:8px 14px;cursor:pointer}
+#installBar .ibx{background:transparent;border:0;color:#fff;font-size:24px;line-height:1;padding:0 4px;cursor:pointer}
+</style>
+<div id="installBar">
+  <span class="ibtxt">📲 Instalá <b>Mi Álbum</b> en tu teléfono</span>
+  <button class="igo" id="installGo">Instalar</button>
+  <button class="ibx" id="installNo" aria-label="cerrar">×</button>
+</div>
+<div class="scrim" id="installScrim">
+  <div class="sheet">
+    <div class="grab"></div>
+    <h3>Instalar en iPhone</h3>
+    <p class="lead">En <b>Safari</b>: tocá el botón <b>Compartir</b> (el cuadradito con la flecha ⬆ abajo) y elegí <b>“Agregar a inicio”</b>. Queda como una app, a pantalla completa.</p>
+    <p class="lead" style="opacity:.85">En <b>Android</b> (Chrome): menú ⋮ → <b>Instalar app</b>.</p>
+    <div class="row"><button class="btn line" id="installClose">Entendido</button></div>
   </div>
 </div>
 
@@ -13526,6 +13549,32 @@ function swapAskTradeOrGift(){
   document.getElementById("swapGift").onclick=()=>{ closeSheet("swapScrim"); toast("Listo ✓"); };
   document.getElementById("swapTrade").onclick=()=>openSwap("give");
 }
+
+/* ============== INSTALAR APP (PWA) ============== */
+let deferredPrompt=null;
+const isIOS=/iphone|ipad|ipod/i.test(navigator.userAgent) || (navigator.platform==="MacIntel" && navigator.maxTouchPoints>1);
+const isStandalone = (window.matchMedia && window.matchMedia('(display-mode: standalone)').matches) || window.navigator.standalone===true;
+function installDismissed(){ try{ return localStorage.getItem('installDismiss')==='1'; }catch(_){ return false; } }
+function showInstallBar(){
+  if(isStandalone || installDismissed()) return;
+  if(isIOS || deferredPrompt){ const b=document.getElementById('installBar'); if(b) b.style.display='flex'; }
+}
+function hideInstallBar(){ const b=document.getElementById('installBar'); if(b) b.style.display='none'; }
+function doInstall(){
+  if(deferredPrompt){
+    deferredPrompt.prompt();
+    deferredPrompt.userChoice.finally(()=>{ deferredPrompt=null; hideInstallBar(); });
+  }else{
+    openSheet('installScrim');
+  }
+}
+window.addEventListener('beforeinstallprompt', e=>{ e.preventDefault(); deferredPrompt=e; showInstallBar(); });
+window.addEventListener('appinstalled', ()=>{ hideInstallBar(); });
+document.getElementById('installGo').onclick=doInstall;
+document.getElementById('installNo').onclick=()=>{ hideInstallBar(); try{ localStorage.setItem('installDismiss','1'); }catch(_){} };
+document.getElementById('installClose').onclick=()=>closeSheet('installScrim');
+(function(){ const mi=document.getElementById('mInstall'); if(mi) mi.onclick=()=>{ closeSheet('menuScrim'); doInstall(); }; })();
+setTimeout(showInstallBar, 1200);
 
 /* ================= BOOT ================= */
 (async function(){
