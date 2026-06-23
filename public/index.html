@@ -12727,7 +12727,9 @@ function findAlignmentPattern(matrix, alignmentPatternQuads, topRight, topLeft, 
   <div class="sheet">
     <div class="grab"></div>
     <h3>Intercambio</h3>
-    <p class="lead">Subí el QR del otro álbum o pegá su lista (Me faltan / Repetidas). Te muestro los cambios posibles.</p>
+    <p class="lead">Sacá o subí una foto de las figus a recibir y te marco las que te faltan. O compará por QR / lista.</p>
+    <div class="row"><button class="btn primary" id="swapStartBtn">📷 Cambio con foto (IA)</button></div>
+    <div class="orsep">— o compará por QR / lista —</div>
     <div class="row">
       <button class="btn solid" id="tradeCamBtn">📷 Escanear QR</button>
       <button class="btn line" id="tradeQrBtn">⤓ Subir QR</button>
@@ -12749,6 +12751,32 @@ function findAlignmentPattern(matrix, alignmentPatternQuads, topRight, topLeft, 
     <div class="row"><button class="btn line" id="qrcamCancel">Cancelar</button></div>
   </div>
 </div>
+
+<!-- Cambio con foto (IA) -->
+<style>
+#swapList{max-height:44vh;overflow:auto;margin:8px 0}
+.swrow{display:flex;align-items:center;gap:10px;padding:11px 8px;border-bottom:1px solid rgba(20,33,27,.07)}
+.swrow input[type=checkbox]{width:22px;height:22px;flex:0 0 auto;accent-color:var(--grass)}
+.swlab{flex:1;font-weight:600}
+.swbadge{font-size:12px;font-weight:800;white-space:nowrap}
+</style>
+<div class="scrim" id="swapScrim">
+  <div class="sheet">
+    <div class="grab"></div>
+    <h3 id="swapTitle">Recibir figus</h3>
+    <p class="lead" id="swapLead">Sacá o subí una foto de las figus a recibir.</p>
+    <div class="row" id="swapPick">
+      <button class="btn solid" id="swapCam">📷 Sacar foto</button>
+      <button class="btn line" id="swapGal">🖼️ Galería</button>
+    </div>
+    <div class="photowrap" id="swapPhotoWrap" style="display:none"><img id="swapImg" alt=""></div>
+    <div id="swapStatus"></div>
+    <div id="swapList"></div>
+    <div class="row" id="swapActions" style="display:none"></div>
+  </div>
+</div>
+<input type="file" id="swapCamIn" accept="image/*" capture="environment">
+<input type="file" id="swapGalIn" accept="image/*">
 
 <input type="file" id="scanIn" accept="image/*" capture="environment">
 
@@ -13335,6 +13363,159 @@ function tickQrCam(){
 }
 document.getElementById("tradeCamBtn").onclick=startQrCam;
 document.getElementById("qrcamCancel").onclick=()=>{ stopQrCam(); closeSheet("qrcamScrim"); };
+
+/* ============== CAMBIO CON FOTO (IA) ============== */
+let swapPhase="receive", swapData=null, swapDetected=[];
+const swapCamIn=document.getElementById("swapCamIn");
+const swapGalIn=document.getElementById("swapGalIn");
+
+function openSwap(phase){
+  swapPhase=phase; swapData=null; swapDetected=[];
+  document.getElementById("swapTitle").textContent = phase==="receive" ? "Recibir figus" : "Cargar las que das";
+  document.getElementById("swapLead").textContent = phase==="receive"
+    ? "Sacá o subí una foto de las figus a recibir. Te marco las que te faltan; tildá/destildá y confirmá."
+    : "Sacá o subí una foto de las repes que vas a entregar. Tildá las que das y confirmá: se descuentan de tu stock.";
+  document.getElementById("swapPick").style.display="flex";
+  document.getElementById("swapPhotoWrap").style.display="none";
+  document.getElementById("swapImg").src="";
+  document.getElementById("swapStatus").innerHTML="";
+  document.getElementById("swapList").innerHTML="";
+  document.getElementById("swapActions").style.display="none";
+  document.getElementById("swapActions").innerHTML="";
+  openSheet("swapScrim");
+}
+document.getElementById("swapStartBtn").onclick=()=>{ closeSheet("tradeScrim"); openSwap("receive"); };
+document.getElementById("swapCam").onclick=()=>swapCamIn.click();
+document.getElementById("swapGal").onclick=()=>swapGalIn.click();
+
+function swapBackToPick(){
+  document.getElementById("swapPick").style.display="flex";
+  document.getElementById("swapPhotoWrap").style.display="none";
+  document.getElementById("swapImg").src="";
+  document.getElementById("swapStatus").innerHTML="";
+  document.getElementById("swapList").innerHTML="";
+  document.getElementById("swapActions").style.display="none";
+  document.getElementById("swapActions").innerHTML="";
+}
+function swapLoadFile(f){
+  if(!f) return;
+  const img=new Image();
+  img.onload=()=>{
+    const cv=document.getElementById("cv"),ctx=cv.getContext("2d");
+    const m=1280,s=Math.min(m/Math.max(img.width,img.height),1);
+    cv.width=Math.round(img.width*s); cv.height=Math.round(img.height*s);
+    ctx.drawImage(img,0,0,cv.width,cv.height);
+    swapData=cv.toDataURL("image/jpeg",0.85);
+    document.getElementById("swapImg").src=swapData;
+    document.getElementById("swapPhotoWrap").style.display="block";
+    document.getElementById("swapPick").style.display="none";
+    swapDetect();
+  };
+  img.onerror=()=>toast("No pude leer la foto");
+  img.src=URL.createObjectURL(f);
+}
+swapCamIn.onchange=()=>{ swapLoadFile(swapCamIn.files[0]); swapCamIn.value=""; };
+swapGalIn.onchange=()=>{ swapLoadFile(swapGalIn.files[0]); swapGalIn.value=""; };
+
+async function swapDetect(){
+  document.getElementById("swapList").innerHTML="";
+  document.getElementById("swapActions").style.display="none";
+  document.getElementById("swapStatus").innerHTML='<div class="spin"><i></i>Reconociendo figus…</div>';
+  try{
+    const b64=swapData.split(",")[1];
+    const r=await fetch("/api/scan",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({image:b64})});
+    if(!r.ok) throw new Error("http "+r.status);
+    const data=await r.json();
+    if(data.error) throw new Error(data.error);
+    swapRender(data.stickers||[]);
+  }catch(e){
+    console.error(e);
+    document.getElementById("swapStatus").innerHTML='<div class="sumline">No pude reconocer las figus. Reintentá o probá otra foto.</div>';
+    const acts=document.getElementById("swapActions");
+    acts.style.display="flex";
+    acts.innerHTML='<button class="btn line" id="swapRetry">📷 Otra foto</button>';
+    document.getElementById("swapRetry").onclick=swapBackToPick;
+  }
+}
+function swapInfo(idx){
+  const st=state[idx];
+  if(swapPhase==="receive"){
+    if(st===0) return {txt:"te falta", color:"#15A050", useful:true};
+    if(st===1) return {txt:"ya la tenés", color:"#7E877F", useful:false};
+    return {txt:"ya es repe", color:"#B97E08", useful:false};
+  }else{
+    if(st===2) return {txt:"repe · podés dar", color:"#B97E08", useful:true};
+    if(st===1) return {txt:"única · no conviene", color:"#7E877F", useful:false};
+    return {txt:"no la tenés", color:"#c0392b", useful:false};
+  }
+}
+function swapRender(arr){
+  const seen=new Set(); swapDetected=[];
+  (Array.isArray(arr)?arr:[]).forEach(o=>{
+    const idx=toIdx(o.code,o.num);
+    if(idx<0){ swapDetected.push({idx:-1,code:o.code,num:o.num}); return; }
+    if(seen.has(idx)) return; seen.add(idx);
+    swapDetected.push({idx,code:o.code,num:o.num});
+  });
+  const valid=swapDetected.filter(d=>d.idx>=0);
+  const unread=swapDetected.filter(d=>d.idx<0);
+  let rows="";
+  valid.forEach(d=>{
+    const inf=swapInfo(d.idx);
+    rows+='<label class="swrow"><input type="checkbox" data-idx="'+d.idx+'"'+(inf.useful?" checked":"")+'>'+
+      '<span class="swlab">'+labelOf(d.idx)+'</span>'+
+      '<span class="swbadge" style="color:'+inf.color+'">'+inf.txt+'</span></label>';
+  });
+  const usefulCount=valid.filter(d=>swapInfo(d.idx).useful).length;
+  let head = swapPhase==="receive"
+    ? '<div class="sumline">Detecté <b>'+valid.length+'</b> · te sirven <b>'+usefulCount+'</b> (pre-marcadas)</div>'
+    : '<div class="sumline">Detecté <b>'+valid.length+'</b> · repes que podés dar <b>'+usefulCount+'</b></div>';
+  if(unread.length) head+='<div class="sumline" style="opacity:.7">'+unread.length+' no se leyeron y se omiten</div>';
+  document.getElementById("swapStatus").innerHTML=head;
+  document.getElementById("swapList").innerHTML = valid.length ? rows : '<div class="sumline">No reconocí figus claras. Probá con mejor luz o más cerca.</div>';
+  const acts=document.getElementById("swapActions");
+  acts.style.display="flex";
+  const lbl = swapPhase==="receive" ? "Confirmar recibidas ✓" : "Confirmar entregadas ✓";
+  acts.innerHTML = (valid.length?'<button class="btn primary" id="swapConfirm">'+lbl+'</button>':'')+'<button class="btn line" id="swapOther">📷 Otra foto</button>';
+  if(valid.length) document.getElementById("swapConfirm").onclick=swapConfirm;
+  document.getElementById("swapOther").onclick=swapBackToPick;
+}
+function swapConfirm(){
+  const checks=[...document.querySelectorAll('#swapList input[type=checkbox]:checked')].map(c=>parseInt(c.dataset.idx,10));
+  if(!checks.length){ toast("No seleccionaste ninguna"); return; }
+  const ns=Uint8Array.from(state), nc=Object.assign({},counts);
+  let n=0;
+  if(swapPhase==="receive"){
+    checks.forEach(idx=>{
+      if(ns[idx]===0){ ns[idx]=1; }
+      else if(ns[idx]===1){ ns[idx]=2; nc[idx]=2; }
+      else { nc[idx]=(nc[idx]||2)+1; }
+      n++;
+    });
+    state.set(ns); counts=nc; sync();
+    toast(n+" figus recibidas ✓");
+    swapAskTradeOrGift();
+  }else{
+    checks.forEach(idx=>{
+      if(ns[idx]===2){ if((nc[idx]||2)>2){ nc[idx]--; } else { ns[idx]=1; delete nc[idx]; } n++; }
+    });
+    state.set(ns); counts=nc; sync();
+    toast(n+" repes entregadas ✓");
+    closeSheet("swapScrim");
+  }
+}
+function swapAskTradeOrGift(){
+  document.getElementById("swapPick").style.display="none";
+  document.getElementById("swapPhotoWrap").style.display="none";
+  document.getElementById("swapImg").src="";
+  document.getElementById("swapList").innerHTML="";
+  document.getElementById("swapStatus").innerHTML='<div class="sumline"><b>Sumadas a tu álbum.</b> ¿Eran de regalo o es un cambio?</div>';
+  const acts=document.getElementById("swapActions");
+  acts.style.display="flex";
+  acts.innerHTML='<button class="btn line" id="swapGift">🎁 Eran nuevas / regalo</button><button class="btn primary" id="swapTrade">🔄 Es un cambio — cargar las que doy</button>';
+  document.getElementById("swapGift").onclick=()=>{ closeSheet("swapScrim"); toast("Listo ✓"); };
+  document.getElementById("swapTrade").onclick=()=>openSwap("give");
+}
 
 /* ================= BOOT ================= */
 (async function(){
