@@ -12830,6 +12830,37 @@ function findAlignmentPattern(matrix, alignmentPatternQuads, topRight, topLeft, 
     </div>
   </div>
 </div>
+<!-- ===== Panel superadmin ===== -->
+<style>
+.adstats{display:flex;gap:8px;flex-wrap:wrap;margin:10px 0}
+.adstat{background:var(--card,#fff);border:1px solid var(--line,#E4E7E1);border-radius:12px;padding:8px 10px;flex:1;min-width:84px;text-align:center}
+.adstat b{display:block;font-size:20px;color:var(--ink,#15211B)}
+.adstat span{font-size:10px;color:var(--muted,#7E877F);text-transform:uppercase;letter-spacing:.3px}
+.adlist{max-height:48vh;overflow:auto;margin-top:8px}
+.adrow{display:flex;align-items:center;gap:8px;padding:10px 4px;border-bottom:1px solid rgba(20,33,27,.08)}
+.adrow .ademail{flex:1;font-weight:700;font-size:14px;overflow:hidden}
+.adrow .admeta{font-size:11px;color:var(--muted,#7E877F);font-weight:500;margin-top:2px}
+.adact{display:flex;gap:6px;flex:0 0 auto}
+.adbtn{border:1px solid var(--line,#E4E7E1);background:var(--card,#fff);color:var(--ink,#15211B);border-radius:8px;padding:6px 9px;font-size:12px;font-weight:700;cursor:pointer;white-space:nowrap}
+.adbtn.danger{color:#c0392b;border-color:#f0c4c4}
+.adbadge{font-size:10px;font-weight:800;padding:2px 6px;border-radius:6px;background:#fde6e9;color:#c0392b;margin-left:6px}
+</style>
+<div class="scrim" id="adminScrim">
+  <div class="sheet" style="max-width:920px;width:96%">
+    <div class="grab"></div>
+    <div class="row" style="justify-content:space-between;align-items:center;margin-bottom:2px">
+      <h3 style="margin:0">🛠️ Panel admin</h3>
+      <button class="btn line" id="adminClose" style="width:auto;padding:8px 14px">Cerrar</button>
+    </div>
+    <div id="adminStats" class="adstats"></div>
+    <div class="row" style="gap:8px">
+      <input id="adminSearch" class="authinput" placeholder="Buscar por email…" style="flex:1;margin:0">
+      <button class="btn line" id="adminCsv" style="width:auto;padding:10px 14px">⬇ CSV</button>
+      <button class="btn line" id="adminReload" style="width:auto;padding:10px 14px">↻</button>
+    </div>
+    <div id="adminList" class="adlist"></div>
+  </div>
+</div>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script>
   window.SB_URL="https://jmnkaierwpubxtwumirz.supabase.co";
@@ -13673,7 +13704,78 @@ async function onLogin(session){
   await cloudPull();
 }
 function onLogout(){ currentUser=null; isAdminUser=false; renderAuth(); }
-function openAdmin(){ toast('Panel admin: lo activo en la próxima fase'); }
+let adminUsers=[];
+async function openAdmin(){
+  if(!isAdminUser){ toast('Solo el admin'); return; }
+  openSheet('adminScrim');
+  document.getElementById('adminList').innerHTML='<div class="sumline">Cargando…</div>';
+  await adminLoad();
+}
+async function adminLoad(){
+  try{
+    const { data, error } = await sb.from('profiles').select('id,email,created_at,last_seen,blocked,scans,pct').order('created_at',{ascending:false});
+    if(error){ document.getElementById('adminList').innerHTML='<div class="sumline">Error: '+error.message+'</div>'; return; }
+    adminUsers=data||[]; adminRenderStats(); adminRender();
+  }catch(e){ console.error(e); }
+}
+function adminRenderStats(){
+  const total=adminUsers.length, now=Date.now();
+  const act7=adminUsers.filter(u=>u.last_seen && (now-new Date(u.last_seen).getTime())<7*864e5).length;
+  const blocked=adminUsers.filter(u=>u.blocked).length;
+  const avg=total?Math.round(adminUsers.reduce((s,u)=>s+(u.pct||0),0)/total):0;
+  document.getElementById('adminStats').innerHTML=
+    '<div class="adstat"><b>'+total+'</b><span>Suscriptores</span></div>'+
+    '<div class="adstat"><b>'+act7+'</b><span>Activos 7d</span></div>'+
+    '<div class="adstat"><b>'+blocked+'</b><span>Bloqueados</span></div>'+
+    '<div class="adstat"><b>'+avg+'%</b><span>Álbum prom</span></div>';
+}
+function adminFmt(s){ if(!s)return'—'; const d=new Date(s); return d.toLocaleDateString('es-AR')+' '+d.toLocaleTimeString('es-AR',{hour:'2-digit',minute:'2-digit'}); }
+function adminRender(){
+  const q=(document.getElementById('adminSearch').value||'').toLowerCase().trim();
+  const list=adminUsers.filter(u=>!q||(u.email||'').toLowerCase().includes(q));
+  if(!list.length){ document.getElementById('adminList').innerHTML='<div class="sumline">Sin resultados.</div>'; return; }
+  document.getElementById('adminList').innerHTML=list.map(u=>{
+    const bk=u.blocked?'<span class="adbadge">bloqueado</span>':'';
+    return '<div class="adrow"><div class="ademail">'+(u.email||'—')+bk+
+      '<div class="admeta">alta '+adminFmt(u.created_at)+' · visto '+adminFmt(u.last_seen)+' · '+(u.pct||0)+'% · '+(u.scans||0)+' scans</div></div>'+
+      '<div class="adact">'+
+        '<button class="adbtn" data-act="'+(u.blocked?'unblock':'block')+'" data-id="'+u.id+'">'+(u.blocked?'Desbloquear':'Bloquear')+'</button>'+
+        '<button class="adbtn danger" data-act="delete" data-id="'+u.id+'" data-email="'+(u.email||'')+'">Eliminar</button>'+
+      '</div></div>';
+  }).join('');
+  document.querySelectorAll('#adminList .adbtn').forEach(b=>b.onclick=()=>adminAction(b.dataset.act,b.dataset.id,b.dataset.email));
+}
+async function adminAction(act,id,email){
+  if(act==='block'||act==='unblock'){
+    const { error } = await sb.from('profiles').update({ blocked: act==='block' }).eq('id',id);
+    if(error){ toast('Error: '+error.message); return; }
+    toast(act==='block'?'Bloqueado ✓':'Desbloqueado ✓'); await adminLoad();
+  }else if(act==='delete'){
+    if(!confirm('¿Eliminar la cuenta de '+(email||'este usuario')+'? Borra su álbum y su acceso.')) return;
+    try{
+      const { data:sess } = await sb.auth.getSession();
+      const token = sess && sess.session && sess.session.access_token;
+      const r = await fetch('/api/admin',{ method:'POST', headers:{ 'content-type':'application/json', authorization:'Bearer '+token }, body: JSON.stringify({ action:'delete', targetId:id }) });
+      const j = await r.json().catch(()=>({}));
+      if(r.ok){ toast('Cuenta eliminada ✓'); await adminLoad(); }
+      else if((j.error||'').indexOf('SERVICE_ROLE')>=0){ toast('Para eliminar falta configurar la service_role (te guío)'); }
+      else { toast('No se pudo eliminar: '+(j.error||r.status)); }
+    }catch(e){ toast('Error al eliminar'); }
+  }
+}
+function adminCsv(){
+  const rows=[['email','alta','ultimo_acceso','pct','scans','bloqueado']].concat(
+    adminUsers.map(u=>[u.email||'',u.created_at||'',u.last_seen||'',u.pct||0,u.scans||0,u.blocked?'si':'no']));
+  const csv=rows.map(r=>r.map(c=>'"'+String(c).replace(/"/g,'""')+'"').join(',')).join('\n');
+  const blob=new Blob([csv],{type:'text/csv;charset=utf-8'}); const a=document.createElement('a');
+  a.href=URL.createObjectURL(blob); a.download='suscriptores.csv'; document.body.appendChild(a); a.click(); a.remove();
+}
+(function wireAdmin(){
+  const c=document.getElementById('adminClose'); if(c) c.onclick=()=>closeSheet('adminScrim');
+  const s=document.getElementById('adminSearch'); if(s) s.oninput=adminRender;
+  const cs=document.getElementById('adminCsv'); if(cs) cs.onclick=adminCsv;
+  const rl=document.getElementById('adminReload'); if(rl) rl.onclick=adminLoad;
+})();
 
 (function initAuth(){
   const mAccount=document.getElementById('mAccount');
