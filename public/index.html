@@ -12699,6 +12699,7 @@ function findAlignmentPattern(matrix, alignmentPatternQuads, topRight, topLeft, 
     <h3>Opciones</h3>
     <p class="lead">Tus marcas se guardan solas en este dispositivo.</p>
     <div class="mlist">
+      <button class="mitem" id="mAccount"><span class="ic">👤</span><span class="tx"><b>Mi cuenta</b><span>Entrá para guardar tu álbum en la nube</span></span></button>
       <button class="mitem" id="mInstall"><span class="ic">📲</span><span class="tx"><b>Instalar la app</b><span>Agregala a tu teléfono (pantalla de inicio)</span></span></button>
       <button class="mitem" id="mImport"><span class="ic">⤓</span><span class="tx"><b>Importar desde captura</b><span>Subí un export de figuritas.app y carga tu álbum</span></span></button>
       <button class="mitem" id="mAllTengo"><span class="ic">✓</span><span class="tx"><b>Marcar todo como “tengo”</b><span>Álbum completo, sin repes</span></span></button>
@@ -12804,6 +12805,38 @@ function findAlignmentPattern(matrix, alignmentPatternQuads, topRight, topLeft, 
 <input type="file" id="scanIn" accept="image/*" capture="environment">
 
 <input type="file" id="fileIn" accept="image/*">
+<!-- ===== Cuentas (Supabase) ===== -->
+<style>
+.authinput{width:100%;box-sizing:border-box;padding:12px;border:1px solid var(--line,#E4E7E1);border-radius:12px;font-size:16px;margin:8px 0;background:var(--card,#fff);color:var(--ink,#15211B)}
+#authMsg,#authSync{margin-top:6px}
+</style>
+<div class="scrim" id="authScrim">
+  <div class="sheet">
+    <div class="grab"></div>
+    <h3 id="authTitle">Mi cuenta</h3>
+    <div id="authLoggedOut">
+      <p class="lead">Entrá para guardar tu álbum en la nube y sincronizarlo entre dispositivos.</p>
+      <div class="row"><button class="btn solid" id="googleBtn">Entrar con Google</button></div>
+      <div class="orsep">— o por email —</div>
+      <input type="email" id="authEmail" class="authinput" placeholder="tu@email.com" autocomplete="email" inputmode="email">
+      <div class="row"><button class="btn primary" id="emailBtn">Enviarme el enlace</button></div>
+      <div id="authMsg" class="sumline"></div>
+    </div>
+    <div id="authLoggedIn" style="display:none">
+      <p class="lead">Sesión iniciada como <b id="authWho"></b>.</p>
+      <div id="authSync" class="sumline">Tu álbum se sincroniza solo en la nube.</div>
+      <div class="row" id="authAdminRow" style="display:none"><button class="btn solid" id="adminBtn">🛠️ Panel admin</button></div>
+      <div class="row"><button class="btn line" id="logoutBtn">Cerrar sesión</button></div>
+    </div>
+  </div>
+</div>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script>
+  window.SB_URL="https://jmnkaierwpubxtwumirz.supabase.co";
+  window.SB_KEY="sb_publishable_oee40XHi4sH46K4N5LBWlg_9y3_p80y";
+  try{ window.sb = window.supabase.createClient(window.SB_URL, window.SB_KEY); }catch(e){ console.error('supabase init', e); }
+</script>
+
 <div class="toast" id="toast"></div>
 <canvas id="cv" style="display:none"></canvas>
 
@@ -13575,6 +13608,95 @@ document.getElementById('installNo').onclick=()=>{ hideInstallBar(); try{ localS
 document.getElementById('installClose').onclick=()=>closeSheet('installScrim');
 (function(){ const mi=document.getElementById('mInstall'); if(mi) mi.onclick=()=>{ closeSheet('menuScrim'); doInstall(); }; })();
 setTimeout(showInstallBar, 1200);
+
+/* ============== CUENTAS + SYNC (Supabase) ============== */
+let currentUser=null, isAdminUser=false, cloudSaveTimer=null;
+function albumSerialize(){ return { s: Array.from(state), c: counts, t: Date.now() }; }
+function albumHasData(d){ return d && Array.isArray(d.s) && d.s.length===N && d.s.some(v=>v>0); }
+function albumApply(d){
+  try{
+    if(d && Array.isArray(d.s) && d.s.length===N){
+      state.set(Uint8Array.from(d.s));
+      counts = (d.c && typeof d.c==='object') ? d.c : {};
+      sync();
+      return true;
+    }
+  }catch(e){ console.error(e); }
+  return false;
+}
+function setAuthSync(t){ const e=document.getElementById('authSync'); if(e) e.textContent=t; }
+async function cloudPull(){
+  if(!currentUser||!window.sb) return;
+  try{
+    const { data, error } = await sb.from('albums').select('data').eq('user_id',currentUser.id).maybeSingle();
+    if(error){ console.error(error); setAuthSync('No pude leer el álbum de la nube.'); return; }
+    const cloud = data && data.data;
+    const localHas = Array.from(state).some(v=>v>0);
+    if(albumHasData(cloud)){ albumApply(cloud); setAuthSync('Álbum cargado de la nube ✓'); }
+    else if(localHas){ await cloudPush(); setAuthSync('Tu álbum se subió a la nube ✓'); }
+    else { setAuthSync('Sin datos todavía; se irá guardando solo.'); }
+  }catch(e){ console.error(e); }
+}
+async function cloudPush(){
+  if(!currentUser||!window.sb) return;
+  try{
+    const payload={ user_id: currentUser.id, data: albumSerialize(), updated_at: new Date().toISOString() };
+    const { error } = await sb.from('albums').upsert(payload);
+    if(error){ console.error(error); return; }
+    const pct = Math.round((Array.from(state).filter(v=>v>0).length / N) * 100);
+    await sb.from('profiles').update({ last_seen:new Date().toISOString(), pct }).eq('id',currentUser.id);
+  }catch(e){ console.error(e); }
+}
+function cloudSaveDebounced(){
+  if(!currentUser) return;
+  clearTimeout(cloudSaveTimer);
+  cloudSaveTimer=setTimeout(cloudPush, 1500);
+}
+/* envolver sync() para auto-guardar en la nube cuando hay sesión */
+const _origSync = sync;
+sync = function(){ _origSync.apply(this, arguments); cloudSaveDebounced(); };
+
+function renderAuth(){
+  const inEl=document.getElementById('authLoggedIn'), outEl=document.getElementById('authLoggedOut');
+  if(!inEl||!outEl) return;
+  if(currentUser){
+    outEl.style.display='none'; inEl.style.display='block';
+    document.getElementById('authWho').textContent=currentUser.email||'—';
+    document.getElementById('authAdminRow').style.display = isAdminUser ? 'flex':'none';
+  }else{ outEl.style.display='block'; inEl.style.display='none'; }
+}
+async function onLogin(session){
+  currentUser = session.user;
+  isAdminUser = (currentUser.email||'').toLowerCase()==='fernandojagoe@gmail.com';
+  renderAuth();
+  try{ await sb.from('profiles').upsert({ id:currentUser.id, email:currentUser.email, last_seen:new Date().toISOString() }, { onConflict:'id' }); }catch(e){}
+  await cloudPull();
+}
+function onLogout(){ currentUser=null; isAdminUser=false; renderAuth(); }
+function openAdmin(){ toast('Panel admin: lo activo en la próxima fase'); }
+
+(function initAuth(){
+  const mAccount=document.getElementById('mAccount');
+  if(mAccount) mAccount.onclick=()=>{ closeSheet('menuScrim'); renderAuth(); openSheet('authScrim'); };
+  if(!window.sb){ const m=document.getElementById('authMsg'); if(m) m.textContent='Servicio de cuentas no disponible (sin conexión).'; return; }
+  sb.auth.getSession().then(({data})=>{ if(data && data.session) onLogin(data.session); }).catch(e=>console.error(e));
+  sb.auth.onAuthStateChange((_e, session)=>{ if(session) onLogin(session); else onLogout(); });
+  const g=document.getElementById('googleBtn'); if(g) g.onclick=async()=>{
+    const m=document.getElementById('authMsg'); m.textContent='Abriendo Google…';
+    try{ const { error } = await sb.auth.signInWithOAuth({ provider:'google', options:{ redirectTo: location.origin } }); if(error) m.textContent='Google aún no está activado. Probá por email.'; }
+    catch(e){ m.textContent='Google aún no está activado. Probá por email.'; }
+  };
+  const eb=document.getElementById('emailBtn'); if(eb) eb.onclick=async()=>{
+    const email=(document.getElementById('authEmail').value||'').trim();
+    const m=document.getElementById('authMsg');
+    if(!email){ m.textContent='Escribí tu email.'; return; }
+    m.textContent='Enviando enlace…';
+    try{ const { error } = await sb.auth.signInWithOtp({ email, options:{ emailRedirectTo: location.origin } }); m.textContent = error ? ('Error: '+error.message) : 'Listo ✓ Revisá tu email y tocá el enlace para entrar.'; }
+    catch(e){ m.textContent='Error al enviar el enlace.'; }
+  };
+  const lo=document.getElementById('logoutBtn'); if(lo) lo.onclick=async()=>{ try{ await sb.auth.signOut(); }catch(e){} onLogout(); closeSheet('authScrim'); toast('Sesión cerrada'); };
+  const ab=document.getElementById('adminBtn'); if(ab) ab.onclick=()=>{ closeSheet('authScrim'); openAdmin(); };
+})();
 
 /* ================= BOOT ================= */
 (async function(){
