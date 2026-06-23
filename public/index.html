@@ -13177,11 +13177,8 @@ async function detect(mode){
   const b64=scanData.split(",")[1];
   const prompt='Identificá TODAS las figuritas visibles en esta foto del álbum "Usa Méx Can 26". Cada una muestra un código de equipo de 3 letras y un número. Devolvé SOLO un array JSON, sin texto ni markdown: [{"code":"ARG","num":5}]. Reglas: equipos válidos = ['+VALID_CODES+'] con num del 1 al 20. Especiales FWC = code "FWC" num 0 a 19 (la "00" es 0). Coca-Cola = code "CC" num 1 a 14. Leé el texto tal cual aparece. Si una no se lee con claridad, omitila. No inventes figuritas.';
   try{
-    const r=await fetch("/api/scan",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({image:b64})});
-    if(!r.ok) throw new Error("http "+r.status);
-    const data=await r.json();
-    if(data.error) throw new Error(data.error);
-    showResults(data.stickers||[], mode);
+    const stickers=await aiScan(b64, n=>{ document.getElementById("scanStatus").innerHTML='<div class="spin"><i></i>Mucha demanda, reintentando ('+n+'/3)…</div>'; });
+    showResults(stickers, mode);
   }catch(e){
     console.error(e);
     document.getElementById("scanStatus").innerHTML='<div class="sumline">No pude reconocer las figus. Revisá la conexión o reintentá.</div>';
@@ -13417,17 +13414,30 @@ function swapLoadFile(f){
 swapCamIn.onchange=()=>{ swapLoadFile(swapCamIn.files[0]); swapCamIn.value=""; };
 swapGalIn.onchange=()=>{ swapLoadFile(swapGalIn.files[0]); swapGalIn.value=""; };
 
+async function aiScan(b64, onRetry){
+  let lastErr;
+  for(let a=0;a<4;a++){
+    try{
+      const r=await fetch("/api/scan",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({image:b64})});
+      const data=await r.json().catch(()=>({}));
+      if(r.ok && !data.error) return data.stickers||[];
+      lastErr=new Error(data.error||("http "+r.status));
+      const msg=(data.error||"").toLowerCase();
+      const transient = r.status===429||r.status===500||r.status===502||r.status===503||msg.includes("demand")||msg.includes("overload")||msg.includes("unavailable")||msg.includes("try again")||msg.includes("retry");
+      if(!transient) throw lastErr;
+    }catch(e){ lastErr=e; }
+    if(a<3){ if(onRetry) onRetry(a+1); await new Promise(z=>setTimeout(z,1800)); }
+  }
+  throw lastErr||new Error("scan failed");
+}
 async function swapDetect(){
   document.getElementById("swapList").innerHTML="";
   document.getElementById("swapActions").style.display="none";
   document.getElementById("swapStatus").innerHTML='<div class="spin"><i></i>Reconociendo figus…</div>';
   try{
     const b64=swapData.split(",")[1];
-    const r=await fetch("/api/scan",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({image:b64})});
-    if(!r.ok) throw new Error("http "+r.status);
-    const data=await r.json();
-    if(data.error) throw new Error(data.error);
-    swapRender(data.stickers||[]);
+    const stickers=await aiScan(b64, n=>{ document.getElementById("swapStatus").innerHTML='<div class="spin"><i></i>Mucha demanda, reintentando ('+n+'/3)…</div>'; });
+    swapRender(stickers);
   }catch(e){
     console.error(e);
     document.getElementById("swapStatus").innerHTML='<div class="sumline">No pude reconocer las figus. Reintentá o probá otra foto.</div>';
